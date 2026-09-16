@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Gemini Live Voice Call</title>
+  <style>
+    :root {
+      --bg-color: #0f172a;
+      --card-bg: #1e293b;
+      --accent-color: #38bdf8;
+      --active-red: #ef4444;
+      --text-color: #f8fafc;
+    }
+
+    body {
+      margin: 0; padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh;
+    }
+
+    .call-card {
+      background: var(--card-bg);
+      border-radius: 28px;
+      padding: 40px;
+      width: 360px;
+      text-align: center;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex; flex-direction: column; align-items: center;
+    }
+
+    .avatar-container {
+      position: relative;
+      margin: 30px 0;
+      width: 120px; height: 120px;
+    }
+
+    .pulse-ring {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      border-radius: 50%;
+      background: var(--accent-color);
+      opacity: 0.2;
+      transition: all 0.3s ease;
+    }
+
+    .active .pulse-ring { animation: pulse 2s infinite ease-in-out; }
+    .speaking .pulse-ring { animation: pulse 0.8s infinite ease-in-out; background: #a855f7; }
+
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 0.3; }
+      50% { transform: scale(1.4); opacity: 0.7; }
+      100% { transform: scale(1); opacity: 0.3; }
+    }
+
+    .avatar {
+      position: relative;
+      width: 100%; height: 100%;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 40px;
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+    }
+
+    .status-text { font-size: 18px; font-weight: 600; margin-bottom: 8px; color: #94a3b8; }
+    .timer { font-size: 14px; color: #64748b; margin-bottom: 30px; }
+
+    .btn {
+      width: 70px; height: 70px;
+      border-radius: 50%; border: none;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px;
+      transition: transform 0.2s, background-color 0.2s;
+    }
+
+    .btn:hover { transform: scale(1.05); }
+    .btn:active { transform: scale(0.95); }
+    .start-btn { background-color: var(--accent-color); color: #000; }
+    .end-btn { background-color: var(--active-red); color: #fff; display: none; }
+  </style>
+</head>
+<body>
+
+  <div class="call-card">
+    <div class="status-text" id="status">Ready to Call</div>
+    <div class="timer" id="timer">00:00</div>
+
+    <div class="avatar-container" id="avatarContainer">
+      <div class="pulse-ring"></div>
+      <div class="avatar">✨</div>
+    </div>
+
+    <button id="callBtn" class="btn start-btn">📞</button>
+  </div>
+
+  <script>
+    let ws = null;
+    let micStream = null;
+    let audioCtx = null;
+    let workletNode = null;
+    let player = null;
+    let callTimer = null;
+    let secondsElapsed = 0;
+
+    const callBtn = document.getElementById('callBtn');
+    const statusText = document.getElementById('status');
+    const timerText = document.getElementById('timer');
+    const avatarContainer = document.getElementById('avatarContainer');
+
+    callBtn.onclick = async () => {
+      if (ws) {
+        endCall();
+      } else {
+        await startCall();
+      }
+    };
+
+    async function startCall() {
+      statusText.innerText = "Connecting...";
+      
+      try {
+        player = new AudioPlayer(24000);
+        player.init();
+
+        // Connect through Node.js WebSocket Proxy
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          statusText.innerText = "Connected";
+          avatarContainer.classList.add('active');
+          
+          initMicrophone();
+          startTimer();
+
+          callBtn.classList.remove('start-btn');
+          callBtn.classList.add('end-btn');
+          callBtn.style.display = 'flex';
+          callBtn.innerText = '🚫';
+        };
+
+        ws.onmessage = async (event) => {
+          let rawData = event.data;
+          if (rawData instanceof Blob) rawData = await rawData.text();
+
+          try {
+            const response = JSON.parse(rawData);
+            handleIncomingMessage(response);
+          } catch (err) {
+            console.error("Parsing error:", err);
+          }
+        };
+
+        ws.onerror = (err) => console.error("WebSocket Error:", err);
+        
+        ws.onclose = () => {
+          endCall();
+        };
+
+      } catch (err) {
+        console.error("Failed to start call:", err);
+        endCall();
+      }
+    }
+
+    function endCall() {
+      if (ws) { ws.close(); ws = null; }
+      stopMicrophone();
+      if (player) { player.stop(); player = null; }
+      
+      clearInterval(callTimer);
+      secondsElapsed = 0;
+      timerText.innerText = "00:00";
+      
+      statusText.innerText = "Call Ended";
+      avatarContainer.classList.remove('active', 'speaking');
+      
+      callBtn.classList.remove('end-btn');
+      callBtn.classList.add('start-btn');
+      callBtn.innerText = '📞';
+    }
+
+    function handleIncomingMessage(response) {
+      if (response.serverContent?.interrupted) {
+        player.stop();
+        avatarContainer.classList.remove('speaking');
+        return;
+      }
+
+      const parts = response.serverContent?.modelTurn?.parts || [];
+      for (const part of parts) {
+        if (part.inlineData && part.inlineData.mimeType?.startsWith('audio/pcm')) {
+          avatarContainer.classList.add('speaking');
+          player.playChunk(part.inlineData.data, () => {
+            avatarContainer.classList.remove('speaking');
+          });
+        }
+      }
+    }
+
+    function startTimer() {
+      callTimer = setInterval(() => {
+        secondsElapsed++;
+        const mins = String(Math.floor(secondsElapsed / 60)).padStart(2, '0');
+        const secs = String(secondsElapsed % 60).padStart(2, '0');
+        timerText.innerText = `${mins}:${secs}`;
+      }, 1000);
+    }
+
+    async function initMicrophone() {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 } });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+
+      const workletCode = `
+        class PCMProcessor extends AudioWorkletProcessor {
+          process(inputs) {
+            const input = inputs[0];
+            if (input && input[0]) {
+              const float32 = input[0];
+              const int16 = new Int16Array(float32.length);
+              for (let i = 0; i < float32.length; i++) {
+                const s = Math.max(-1, Math.min(1, float32[i]));
+                int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+              }
+              this.port.postMessage(int16.buffer, [int16.buffer]);
+            }
+            return true;
+          }
+        }
+        registerProcessor('pcm-processor', PCMProcessor);
+      `;
+
+      const blob = new Blob([workletCode], { type: 'application/javascript' });
+      const workletUrl = URL.createObjectURL(blob);
+      await audioCtx.audioWorklet.addModule(workletUrl);
+
+      const source = audioCtx.createMediaStreamSource(micStream);
+      workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor');
+
+     workletNode.port.onmessage = (e) => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const base64Audio = arrayBufferToBase64(e.data);
+    
+    // Updated Gemini Live API realtimeInput payload schema
+    const audioPayload = {
+      realtimeInput: {
+        audio: {
+          mimeType: "audio/pcm;rate=16000",
+          data: base64Audio
+        }
+      }
+    };
+
+    ws.send(JSON.stringify(audioPayload));
+  }
+};
+
+      source.connect(workletNode);
+    }
+
+    function stopMicrophone() {
+      if (micStream) micStream.getTracks().forEach(track => track.stop());
+      if (audioCtx) audioCtx.close();
+    }
+
+    function arrayBufferToBase64(buffer) {
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      return window.btoa(binary);
+    }
+
+    class AudioPlayer {
+      constructor(sampleRate) {
+        this.sampleRate = sampleRate;
+        this.ctx = null;
+        this.nextStartTime = 0;
+        this.sources = [];
+      }
+
+      init() {
+        this.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: this.sampleRate });
+      }
+
+      playChunk(base64Pcm, onEnded) {
+        if (!this.ctx) return;
+        const float32 = this.base64ToFloat32(base64Pcm);
+        
+        const buffer = this.ctx.createBuffer(1, float32.length, this.sampleRate);
+        buffer.getChannelData(0).set(float32);
+
+        const source = this.ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.ctx.destination);
+
+        const now = this.ctx.currentTime;
+        if (this.nextStartTime < now) this.nextStartTime = now + 0.01;
+
+        source.start(this.nextStartTime);
+        this.sources.push(source);
+
+        this.nextStartTime += buffer.duration;
+        
+        source.onended = () => {
+          this.sources = this.sources.filter(s => s !== source);
+          if (this.sources.length === 0 && onEnded) onEnded();
+        };
+      }
+
+      base64ToFloat32(base64) {
+        const binary = window.atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const view = new DataView(bytes.buffer);
+        const float32 = new Float32Array(bytes.byteLength / 2);
+        for (let i = 0; i < float32.length; i++) {
+          const int16 = view.getInt16(i * 2, true);
+          float32[i] = int16 / (int16 < 0 ? 0x8000 : 0x7FFF);
+        }
+        return float32;
+      }
+
+      stop() {
+        this.sources.forEach(s => { try { s.stop(); } catch(e){} });
+        this.sources = [];
+        if (this.ctx) this.nextStartTime = this.ctx.currentTime;
+      }
+    }
+  </script>
+</body>
+</html>
