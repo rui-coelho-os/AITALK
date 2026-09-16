@@ -161,6 +161,7 @@
         ws.onerror = (err) => console.error("WebSocket Error:", err);
         
         ws.onclose = () => {
+          console.log(`[CLIENT WS CLOSED] Code: ${event.code}, Reason: ${event.reason || 'No reason provided'}`);
           endCall();
         };
 
