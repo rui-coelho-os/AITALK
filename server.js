@@ -48,6 +48,24 @@ const toolDefinitions = [
 ];
 
 wss.on('connection', (clientWs) => {
+
+console.log('Client connected to proxy');
+
+  const apiKey = process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.trim() : '';
+
+  if (!apiKey) {
+    console.error('ERROR: GEMINI_API_KEY environment variable is missing!');
+    clientWs.close(1011, 'Missing API Key');
+    return;
+  }
+
+  // Pass API key cleanly via custom headers
+  const geminiWs = new WebSocket(GEMINI_WS_URL, {
+    headers: {
+      'x-goog-api-key': apiKey
+    }
+  );
+
   console.log('Client connected to proxy');
 
   // Connect to Gemini
