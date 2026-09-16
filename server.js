@@ -51,18 +51,20 @@ wss.on('connection', (clientWs) => {
 
 console.log('Client connected to proxy');
 
-  const apiKey = process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.trim() : '';
+  const apiKey = apiKey = (process.env.GEMINI_API_KEY || '')
+    .trim()
+    .replace(/^["']|["']$/g, '');
 
   if (!apiKey) {
     console.error('ERROR: GEMINI_API_KEY environment variable is missing!');
     clientWs.close(1011, 'Missing API Key');
     return;
   }
-
+GEMINI_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(apiKey)}`;
   // Pass API key cleanly via custom headers
   const geminiWs = new WebSocket(GEMINI_WS_URL, {
     headers: {
-      'x-goog-api-key': apiKey
+      'x-goog-api-key': encodeURIComponent(apiKey)
     }}
   );
 
