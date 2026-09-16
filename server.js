@@ -63,7 +63,7 @@ console.log('Client connected to proxy');
   const geminiWs = new WebSocket(GEMINI_WS_URL, {
     headers: {
       'x-goog-api-key': apiKey
-    }
+    }}
   );
 
   console.log('Client connected to proxy');
