@@ -68,8 +68,7 @@ console.log('Client connected to proxy');
 
   console.log('Client connected to proxy');
 
-  // Connect to Gemini
-  const geminiWs = new WebSocket(GEMINI_WS_URL);
+ 
 
   geminiWs.on('open', () => {
     console.log('Connected to Gemini Live API');
